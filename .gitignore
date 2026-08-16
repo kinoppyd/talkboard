@@ -1,0 +1,32 @@
+# External source checkouts
+/repositories/
+
+# Operating system and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Python tooling and virtual environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# JavaScript tooling and build output
+node_modules/
+dist/
+build/
+coverage/
+.npm/
+
+# Logs and temporary files
+*.log
+tmp/
+.cache/
