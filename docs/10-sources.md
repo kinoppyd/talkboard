@@ -49,6 +49,10 @@ asset:      RP2040 MSC_FLASH UF2（zip / gzip）
 
 - [PicoRuby keyboard README](../repositories/picoruby/mrbgems/picoruby-keyboard/README.md)
 - [PicoRuby keyboard gem](../repositories/picoruby/mrbgems/picoruby-keyboard)
+- [Keyboard implementation](../repositories/picoruby/mrbgems/picoruby-keyboard/mrblib/keyboard.rb)
+- [KeyboardMatrix implementation](../repositories/picoruby/mrbgems/picoruby-keyboard_matrix/src/keyboard_matrix.c)
+- [R2P2 README](../repositories/picoruby/mrbgems/picoruby-r2p2/README.md)
+- [R2P2 build task](../repositories/picoruby/tasks/picoruby/r2p2.rake)
 
 ## 公式 Web 資料
 
@@ -58,6 +62,11 @@ asset:      RP2040 MSC_FLASH UF2（zip / gzip）
 - [PRK Firmware GitHub](https://github.com/picoruby/prk_firmware)
 - [PRK Firmware 0.10.0 release](https://github.com/picoruby/prk_firmware/releases/tag/0.10.0)
 - [PicoRuby GitHub](https://github.com/picoruby/picoruby)
+- [PicoRuby releases](https://github.com/picoruby/picoruby/releases/latest)
+- [R2P2 setup](https://picoruby.org/setup)
+- [R2P2 terminal / Web Terminal](https://picoruby.org/terminal-emulator)
+- [R2P2 troubleshooting](https://picoruby.org/troubleshooting)
+- [PicoRuby `Keyboard` API](https://picoruby.org/Keyboard.html)
 
 ### 公式 Wiki
 

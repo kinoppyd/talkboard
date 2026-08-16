@@ -49,6 +49,8 @@ GitHub の最新正式リリースは [0.10.0](https://github.com/picoruby/prk_f
 
 新規設計では後継を優先すべきですが、API はそのまま互換ではありません。PRK の典型的な `Keyboard.new`、`init_pins`、`add_layer` に対し、現行の [`picoruby-keyboard` README](../repositories/picoruby/mrbgems/picoruby-keyboard/README.md) は、行・列ピンをコンストラクタへ渡し、ブロック形式の `layer` と `MO`、`LT`、`MT`、`TG` 等を使います。既存キーマップの移行は機械的なコピーではなく書き換えになります。
 
+R2P2 は PRK の drive-reload firmware ではなく、`/home/app.rb` を実行する shell platform です。`KC_NO` の透明化、利用者が実装する split transport、BLE HID loop との制約など、移行時に重要な差を[移行ガイド](12-prk-to-r2p2-migration.md)へ整理しました。
+
 ## 向いている用途、避けるべき用途
 
 向いている用途:

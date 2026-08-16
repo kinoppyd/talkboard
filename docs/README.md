@@ -20,6 +20,8 @@ PRK Firmware は、RP2040 系マイコン上で PicoRuby を動かし、Ruby の
 - [ソースからのビルド](08-build.md)
 - [デバッグとトラブルシューティング](09-debug-and-troubleshooting.md)
 - [調査方法と参照資料](10-sources.md)
+- [R2P2 の `Keyboard` クラス](11-r2p2-keyboard.md)
+- [PRK Firmware から R2P2 への移行](12-prk-to-r2p2-migration.md)
 
 ## 最初に押さえるべき判断
 
@@ -29,6 +31,8 @@ PRK Firmware は、RP2040 系マイコン上で PicoRuby を動かし、Ruby の
 | RP2040 で既存キーマップを試す | まず [0.10.0 リリース](https://github.com/picoruby/prk_firmware/releases/tag/0.10.0)の UF2 を検討する |
 | Pico 2 / RP2350 で PRK を使う | `master` からビルドが必要。Pico 2 対応は 0.10.0 より後の変更である |
 | 新規に Ruby でキーボードを作る | 保守中の [PicoRuby `Keyboard`](https://github.com/picoruby/picoruby/tree/master/mrbgems/picoruby-keyboard) を先に評価する |
+
+新規設計向けの R2P2 `Keyboard` の具体的な API、R2P2 application としての配置、PRK との差分は、[R2P2 の `Keyboard` クラス](11-r2p2-keyboard.md)と[移行ガイド](12-prk-to-r2p2-migration.md)にまとめています。
 
 ## 読む際の注意
 
