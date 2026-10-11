@@ -22,6 +22,7 @@ PRK Firmware は、RP2040 系マイコン上で PicoRuby を動かし、Ruby の
 - [調査方法と参照資料](10-sources.md)
 - [R2P2 の `Keyboard` クラス](11-r2p2-keyboard.md)
 - [PRK Firmware から R2P2 への移行](12-prk-to-r2p2-migration.md)
+- [Pico 2 W + ATP3011F1-PU 対話読み上げ回路・実装](atp3011/README.md)
 
 ## 最初に押さえるべき判断
 
