@@ -1,5 +1,6 @@
 # External source checkouts
 /repositories/
+/.worktree/
 
 # Operating system and editor files
 .DS_Store
