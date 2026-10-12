@@ -1,0 +1,335 @@
+{
+  "title": "Talkboard HID relay PoC / net-label schematic",
+  "revision": 1,
+  "notes": [
+    "Every identical net label is connected. NC pins stay open.",
+    "MCU1 numbers are physical header pin numbers, not GPIO numbers.",
+    "PC cable connects only to Pico micro-USB. Never wire EXT5V or HOST_VBUS to MCU1 pin40.",
+    "Power off BOTH supplies before wiring. External 5V must be on during operation."
+  ],
+  "parts": [
+    {
+      "ref": "MCU1",
+      "part": "Raspberry Pi Pico 2 W (headers)",
+      "pins": {
+        "4": "RESET_N",
+        "9": "SDA",
+        "10": "SCL",
+        "14": "DP_GPIO",
+        "15": "DM_GPIO",
+        "16": "HOST_EN",
+        "17": "HOST_OC_N",
+        "36": "+3V3",
+        "38": "GND",
+        "39": "VSYS",
+        "40": "PC_VBUS_NC"
+      }
+    },
+    {
+      "ref": "U1",
+      "part": "ATP3011F1-PU DIP28",
+      "pins": {
+        "1": "RESET_N",
+        "2": "NC",
+        "3": "NC",
+        "4": "GND",
+        "5": "+3V3",
+        "6": "+3V3",
+        "7": "+3V3",
+        "8": "GND",
+        "9": "NC",
+        "10": "NC",
+        "11": "NC",
+        "12": "AOUT",
+        "13": "NC",
+        "14": "+3V3",
+        "15": "+3V3",
+        "16": "NC",
+        "17": "NC",
+        "18": "NC",
+        "19": "NC",
+        "20": "+3V3",
+        "21": "NC",
+        "22": "GND",
+        "23": "NC",
+        "24": "NC",
+        "25": "NC",
+        "26": "NC",
+        "27": "SDA",
+        "28": "SCL"
+      }
+    },
+    {
+      "ref": "U2",
+      "part": "LM386N-1/NOPB DIP8",
+      "pins": {
+        "1": "NC",
+        "2": "GND",
+        "3": "AMP_IN",
+        "4": "GND",
+        "5": "AMP_OUT",
+        "6": "+5V_EXT",
+        "7": "BYPASS",
+        "8": "NC"
+      }
+    },
+    {
+      "ref": "U3",
+      "part": "TPS2051BD SOIC8 + DIP adapter",
+      "pins": {
+        "1": "GND",
+        "2": "+5V_EXT",
+        "3": "+5V_EXT",
+        "4": "HOST_EN",
+        "5": "HOST_OC_N",
+        "6": "HOST_VBUS",
+        "7": "HOST_VBUS",
+        "8": "HOST_VBUS"
+      }
+    },
+    {
+      "ref": "J1",
+      "part": "USB-A female breakout (keyboard)",
+      "pins": {
+        "1": "HOST_VBUS",
+        "2": "USB_DM",
+        "3": "USB_DP",
+        "4": "GND",
+        "SHIELD": "GND"
+      }
+    },
+    {
+      "ref": "J2",
+      "part": "Regulated 5V 2A isolated supply input",
+      "pins": {
+        "POS": "+5V_EXT",
+        "NEG": "GND"
+      }
+    },
+    {
+      "ref": "D1",
+      "part": "1N5819 Schottky DO-41",
+      "pins": {
+        "A": "+5V_EXT",
+        "K": "VSYS"
+      }
+    },
+    {
+      "ref": "R1",
+      "part": "22 ohm",
+      "pins": {
+        "1": "DP_GPIO",
+        "2": "USB_DP"
+      }
+    },
+    {
+      "ref": "R2",
+      "part": "22 ohm",
+      "pins": {
+        "1": "DM_GPIO",
+        "2": "USB_DM"
+      }
+    },
+    {
+      "ref": "R3",
+      "part": "15k ohm",
+      "pins": {
+        "1": "USB_DP",
+        "2": "GND"
+      }
+    },
+    {
+      "ref": "R4",
+      "part": "15k ohm",
+      "pins": {
+        "1": "USB_DM",
+        "2": "GND"
+      }
+    },
+    {
+      "ref": "R5",
+      "part": "4.7k ohm",
+      "pins": {
+        "1": "SDA",
+        "2": "+3V3"
+      }
+    },
+    {
+      "ref": "R6",
+      "part": "4.7k ohm",
+      "pins": {
+        "1": "SCL",
+        "2": "+3V3"
+      }
+    },
+    {
+      "ref": "R7",
+      "part": "10k ohm",
+      "pins": {
+        "1": "RESET_N",
+        "2": "+3V3"
+      }
+    },
+    {
+      "ref": "R8",
+      "part": "100k ohm",
+      "pins": {
+        "1": "HOST_EN",
+        "2": "GND"
+      }
+    },
+    {
+      "ref": "R9",
+      "part": "10k ohm",
+      "pins": {
+        "1": "HOST_OC_N",
+        "2": "+3V3"
+      }
+    },
+    {
+      "ref": "R10",
+      "part": "1k ohm",
+      "pins": {
+        "1": "AOUT",
+        "2": "FILTER"
+      }
+    },
+    {
+      "ref": "R11",
+      "part": "10 ohm",
+      "pins": {
+        "1": "ZOBEL",
+        "2": "GND"
+      }
+    },
+    {
+      "ref": "VR1",
+      "part": "10k linear potentiometer",
+      "pins": {
+        "HIGH": "AUDIO_AC",
+        "WIPER": "AMP_IN",
+        "LOW": "GND"
+      }
+    },
+    {
+      "ref": "C1",
+      "part": "100nF ceramic",
+      "pins": {
+        "1": "+3V3",
+        "2": "GND"
+      }
+    },
+    {
+      "ref": "C2",
+      "part": "100nF ceramic",
+      "pins": {
+        "1": "+3V3",
+        "2": "GND"
+      }
+    },
+    {
+      "ref": "C3",
+      "part": "10uF electrolytic 16V",
+      "pins": {
+        "PLUS": "+3V3",
+        "MINUS": "GND"
+      }
+    },
+    {
+      "ref": "C4",
+      "part": "47nF film",
+      "pins": {
+        "1": "FILTER",
+        "2": "GND"
+      }
+    },
+    {
+      "ref": "C5",
+      "part": "1uF film nonpolar",
+      "pins": {
+        "1": "FILTER",
+        "2": "AUDIO_AC"
+      }
+    },
+    {
+      "ref": "C6",
+      "part": "100nF ceramic",
+      "pins": {
+        "1": "+5V_EXT",
+        "2": "GND"
+      }
+    },
+    {
+      "ref": "C7",
+      "part": "100uF electrolytic 16V",
+      "pins": {
+        "PLUS": "+5V_EXT",
+        "MINUS": "GND"
+      }
+    },
+    {
+      "ref": "C8",
+      "part": "10uF electrolytic 16V",
+      "pins": {
+        "PLUS": "BYPASS",
+        "MINUS": "GND"
+      }
+    },
+    {
+      "ref": "C9",
+      "part": "220uF electrolytic 16V",
+      "pins": {
+        "PLUS": "AMP_OUT",
+        "MINUS": "SPEAKER"
+      }
+    },
+    {
+      "ref": "C10",
+      "part": "47nF film",
+      "pins": {
+        "1": "AMP_OUT",
+        "2": "ZOBEL"
+      }
+    },
+    {
+      "ref": "C11",
+      "part": "100nF ceramic (U3 IN)",
+      "pins": {
+        "1": "+5V_EXT",
+        "2": "GND"
+      }
+    },
+    {
+      "ref": "C12",
+      "part": "10uF electrolytic 16V (U3 IN)",
+      "pins": {
+        "PLUS": "+5V_EXT",
+        "MINUS": "GND"
+      }
+    },
+    {
+      "ref": "C13",
+      "part": "150uF electrolytic 16V (USB VBUS)",
+      "pins": {
+        "PLUS": "HOST_VBUS",
+        "MINUS": "GND"
+      }
+    },
+    {
+      "ref": "C14",
+      "part": "100nF ceramic (USB VBUS)",
+      "pins": {
+        "1": "HOST_VBUS",
+        "2": "GND"
+      }
+    },
+    {
+      "ref": "SP1",
+      "part": "8 ohm >=0.5W passive speaker",
+      "pins": {
+        "PLUS": "SPEAKER",
+        "MINUS": "GND"
+      }
+    }
+  ]
+}
