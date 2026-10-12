@@ -9,7 +9,7 @@ expected = '5a37a66dc5d3fbe0ef3cdbeda923a757440f984f'
 actual, status = Open3.capture2('git', '-C', pio, 'rev-parse', 'HEAD')
 abort 'wrong PIO USB revision' unless status.success? && actual.strip == expected
 abort 'PicoRuby patches missing' unless File.file?(File.join(picoruby, 'build_config/talkboard-pico2w.rb'))
-out = File.join(root, 'build', 'relay')
+out = File.expand_path(ENV.fetch('TALKBOARD_BUILD_DIR', File.join(root, 'build', 'relay')))
 FileUtils.mkdir_p(out)
 main = File.join(out, 'main.rb')
 File.write(main, File.read(File.join(root, 'firmware/relay/speech.rb')) + "\n" + File.read(File.join(root, 'firmware/relay/main.rb')))
