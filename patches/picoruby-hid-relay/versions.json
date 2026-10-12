@@ -1,0 +1,7 @@
+{
+  "picoruby": "371d176f1bfd834d18ff2a8c86d2667b51b0fd32",
+  "pico_sdk": "98a542c1a62fb549ffb5d66a3e5892b06276b670",
+  "tinyusb": "86ad6e56c1700e85f1c5678607a762cfe3aa2f47",
+  "pico_pio_usb": "5a37a66dc5d3fbe0ef3cdbeda923a757440f984f",
+  "picotool": "6f6458d792b93685a11423b244a585eaa99eafcf"
+}
