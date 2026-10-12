@@ -14,5 +14,11 @@ Dir.chdir(root) do
            '-fsanitize=address,undefined', '-I',File.join(src,'include'),
            'test/relay_core_test.c', File.join(src,'ports/common/relay_core.c'), '-o',exe) || abort('C compile failed')
     system(exe) || abort('C tests failed')
+    runtime = File.join(tmp,'relay_runtime_test')
+    system(ENV.fetch('CC','cc'), '-std=c11', '-Wall', '-Wextra', '-Werror',
+           '-fsanitize=address,undefined', '-I','test/relay_stubs',
+           '-I',File.join(src,'ports/rp2040'), 'test/relay_runtime_test.c',
+           File.join(src,'ports/common/relay_core.c'), '-o',runtime) || abort('runtime compile failed')
+    system(runtime) || abort('runtime tests failed')
   end
 end
