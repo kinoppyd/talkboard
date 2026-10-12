@@ -1,0 +1,163 @@
+From b76a884f785df60ee93082f97dc6651091c47b83 Mon Sep 17 00:00:00 2001
+From: kinoppyd <ppyd@kinoppyd.dev>
+Date: Mon, 12 Oct 2026 10:15:20 +0900
+Subject: [PATCH] Add isolated Pico 2 W dual-USB build configuration
+
+---
+ build_config/talkboard-pico2w.rb            | 54 +++++++++++++++++++++
+ mrbgems/picoruby-r2p2/cmake/CMakeLists.txt  | 25 +++++++++-
+ mrbgems/picoruby-r2p2/include/tusb_config.h | 16 +++++-
+ mrbgems/picoruby-r2p2/ports/rp2040/main.c   |  3 ++
+ 4 files changed, 95 insertions(+), 3 deletions(-)
+ create mode 100644 build_config/talkboard-pico2w.rb
+
+diff --git a/build_config/talkboard-pico2w.rb b/build_config/talkboard-pico2w.rb
+new file mode 100644
+index 00000000..5818ee4c
+--- /dev/null
++++ b/build_config/talkboard-pico2w.rb
+@@ -0,0 +1,54 @@
++MRuby::CrossBuild.new("talkboard-pico2w") do |conf|
++
++  ###############################################################
++  # You need following tools:
++  #   arm-none-eabi       | to make libmruby.a
++  ###############################################################
++
++  conf.toolchain("gcc")
++
++  conf.cc.defines << "PICORB_PLATFORM_RP2"
++
++  conf.cc.defines << "MRB_TICK_UNIT=1"
++  conf.cc.defines << "MRB_TIMESLICE_TICK_COUNT=10"
++
++  conf.cc.defines << "MRB_UTF8_STRING"
++  conf.cc.defines << "MRB_INT64"
++  conf.cc.defines << "MRB_NO_BOXING"
++  conf.cc.defines << "MRB_32BIT"
++  conf.cc.defines << "MRB_USE_CUSTOM_RO_DATA_P"
++  conf.cc.defines << "MRB_LINK_TIME_RO_DATA_P"
++  conf.cc.defines << "NO_CLOCK_GETTIME=1"
++
++  conf.cc.command = "arm-none-eabi-gcc"
++  conf.linker.command = "arm-none-eabi-ld"
++  conf.linker.flags << "-static"
++  conf.archiver.command = "arm-none-eabi-ar"
++
++  conf.cc.host_command = "gcc"
++
++  conf.cc.flags.flatten!
++  conf.cc.flags << "-mcpu=cortex-m33"
++  conf.cc.flags << "-mthumb"
++
++  conf.cc.flags << "-fno-strict-aliasing"
++  conf.cc.flags << "-fno-unroll-loops"
++  conf.cc.flags << "-mslow-flash-data"
++
++  conf.cc.flags << "-fshort-enums"
++
++  conf.cc.flags << "-Wall"
++  conf.cc.flags << "-Wno-format"
++  conf.cc.flags << "-Wno-unused-function"
++  conf.cc.flags << "-ffunction-sections"
++  conf.cc.flags << "-fdata-sections"
++
++  conf.cc.defines << "TALKBOARD_RELAY"
++  conf.picoruby
++
++  conf.gembox "minimum"
++  conf.gembox "core"
++  conf.gembox "stdlib"
++  conf.gembox "peripherals"
++  conf.gem core: 'picoruby-hid-relay'
++end
+diff --git a/mrbgems/picoruby-r2p2/cmake/CMakeLists.txt b/mrbgems/picoruby-r2p2/cmake/CMakeLists.txt
+index 7c51b36e..26d1e2c1 100644
+--- a/mrbgems/picoruby-r2p2/cmake/CMakeLists.txt
++++ b/mrbgems/picoruby-r2p2/cmake/CMakeLists.txt
+@@ -106,6 +106,13 @@ add_custom_target(mrbdir ALL
+ )
+ 
+ set(RUBY_FILES main_task)
++set(R2P2_MAIN_SCRIPT ${R2P2_GEM_DIR}/mrblib/main_task.rb)
++if(TALKBOARD_RELAY)
++  if(NOT EXISTS "${TALKBOARD_MAIN}")
++    message(FATAL_ERROR "TALKBOARD_MAIN must name the generated standalone Ruby entry point")
++  endif()
++  set(R2P2_MAIN_SCRIPT "${TALKBOARD_MAIN}")
++endif()
+ add_dependencies(${PROJECT_NAME}
+   mrbdir
+   ${RUBY_FILES}
+@@ -114,8 +121,8 @@ foreach(rb ${RUBY_FILES})
+   add_custom_target(${rb}
+     COMMAND
+       mkdir -p ${CMAKE_BINARY_DIR}/mrb &&
+-      ${PICORBC} -B${rb} -o${CMAKE_BINARY_DIR}/mrb/${rb}.c ${R2P2_GEM_DIR}/mrblib/${rb}.rb
+-    DEPENDS ${R2P2_GEM_DIR}/mrblib/${rb}.rb
++      ${PICORBC} -B${rb} -o${CMAKE_BINARY_DIR}/mrb/${rb}.c ${R2P2_MAIN_SCRIPT}
++    DEPENDS ${R2P2_MAIN_SCRIPT}
+   )
+ endforeach(rb)
+ 
+@@ -288,3 +295,17 @@ add_custom_command(
+   COMMAND gzip -kf ${PROJECT_NAME}.uf2
+   COMMAND zip -r ${PROJECT_NAME}.uf2.zip ${PROJECT_NAME}.uf2
+ )
++
++# Talkboard PoC: no edits to SDK/TinyUSB submodules.
++if(TALKBOARD_RELAY)
++  if(USE_WIFI)
++    message(FATAL_ERROR "Talkboard requires USE_WIFI=OFF")
++  endif()
++  if(NOT EXISTS "${PICO_PIO_USB_PATH}/CMakeLists.txt")
++    message(FATAL_ERROR "Set PICO_PIO_USB_PATH to the pinned Pico-PIO-USB checkout")
++  endif()
++  add_subdirectory("${PICO_PIO_USB_PATH}" pico_pio_usb)
++  target_link_libraries(${PROJECT_NAME} PRIVATE tinyusb_host pico_pio_usb)
++  target_compile_definitions(${PROJECT_NAME} PRIVATE TALKBOARD_RELAY=1 HEAP_SIZE_KB=320 HEAP_SIZE=327680)
++  set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_LIST_FILE}")
++endif()
+diff --git a/mrbgems/picoruby-r2p2/include/tusb_config.h b/mrbgems/picoruby-r2p2/include/tusb_config.h
+index 3757a3ac..d1083688 100644
+--- a/mrbgems/picoruby-r2p2/include/tusb_config.h
++++ b/mrbgems/picoruby-r2p2/include/tusb_config.h
+@@ -127,7 +127,21 @@
+ #define CFG_TUD_CDC_EP_BUFSIZE    512
+ 
+ // HID buffer size
+-#define CFG_TUD_HID_EP_BUFSIZE    16
++#ifdef TALKBOARD_RELAY
++#define CFG_TUD_HID_EP_BUFSIZE 64
++#define CFG_TUH_ENABLED 1
++#define BOARD_TUH_RHPORT 1
++#define CFG_TUH_RPI_PIO_USB 1
++#define CFG_TUH_HID 4
++#define CFG_TUH_DEVICE_MAX 1
++#define CFG_TUH_ENUMERATION_BUFSIZE 1024
++#define CFG_TUH_HID_EPIN_BUFSIZE 64
++#define CFG_TUH_HID_EPOUT_BUFSIZE 64
++#define CFG_TUH_HUB 0
++#define CFG_TUSB_RHPORT1_MODE (OPT_MODE_HOST | OPT_MODE_FULL_SPEED)
++#else
++#define CFG_TUD_HID_EP_BUFSIZE 16
++#endif
+ 
+ #ifdef __cplusplus
+  }
+diff --git a/mrbgems/picoruby-r2p2/ports/rp2040/main.c b/mrbgems/picoruby-r2p2/ports/rp2040/main.c
+index 15af97bc..fe46c780 100644
+--- a/mrbgems/picoruby-r2p2/ports/rp2040/main.c
++++ b/mrbgems/picoruby-r2p2/ports/rp2040/main.c
+@@ -182,6 +182,9 @@ report_startup_error(mrb_state *mrb, mrb_value exc, const char *phase)
+ int
+ main(void)
+ {
++#ifdef TALKBOARD_RELAY
++  set_sys_clock_khz(120000, true);
++#endif
+   stdio_init_all();
+   // printf() goes to Picoprobe UART
+   printf("R2P2 PicoRuby starting...\n");
+-- 
+2.48.1

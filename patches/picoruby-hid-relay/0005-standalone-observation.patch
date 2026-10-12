@@ -1,0 +1,81 @@
+Subject: [PATCH] Keep speech observation alive without PC; sense VBUS on GP14
+
+diff --git a/mrbgems/picoruby-hid-relay/ports/rp2040/hid_relay.c b/mrbgems/picoruby-hid-relay/ports/rp2040/hid_relay.c
+index 598596b0..e61da3d3 100644
+--- a/mrbgems/picoruby-hid-relay/ports/rp2040/hid_relay.c
++++ b/mrbgems/picoruby-hid-relay/ports/rp2040/hid_relay.c
+@@ -7,6 +7,7 @@
+ #include "hardware/sync.h"
+ #include "pio_usb.h"
+ #include "tusb.h"
++#include "device/dcd.h"
+ #include <string.h>
+ #define PORTS 4
+ #define FRAMES 32
+@@ -26,6 +27,7 @@ static uint32_t ew,er,generation;
+ static relay_state current, observed, sent;
+ static uint8_t protocol=HID_PROTOCOL_REPORT, phase;
+ static bool taking, online;
++static bool started, vbus_known, vbus_present;
+ static uint8_t idle_rate;
+ static uint32_t last_keyboard_ms;
+ static inline uint32_t load(uint32_t *p) { return __atomic_load_n(p,__ATOMIC_ACQUIRE); }
+@@ -117,7 +119,13 @@ static void host_main(void) {
+   }
+ }
+ static uint32_t host_stack[2048];
+-void relay_start(void) { multicore_launch_core1_with_stack(host_main,host_stack,sizeof(host_stack)); }
++void relay_start(void) {
++  /* Pico 2 W's on-board VBUS sense is on CYW43; Wi-Fi is disabled here.
++   * GP14 instead reads PC VBUS through an external 10k/10k divider. */
++  gpio_init(14); gpio_set_dir(14,GPIO_IN); gpio_disable_pulls(14);
++  started=true;
++  multicore_launch_core1_with_stack(host_main,host_stack,sizeof(host_stack));
++}
+ static void observe(uint32_t ms) {
+   uint8_t mods=current.keys[28];
+   for(unsigned u=4;u<224;u++) if((current.keys[u/8]&~observed.keys[u/8])&(1u<<(u%8))) {
+@@ -133,13 +141,39 @@ static bool keyboard_send(void) {
+   if(protocol==HID_PROTOCOL_BOOT) { relay_boot_report(&current,boot); return tud_hid_n_report(0,0,boot,8); }
+   return tud_hid_n_report(0,0,current.keys,32);
+ }
++static void observe_pending(void) {
++  /* Bounded snapshot of the producer index: never spin on new arrivals. */
++  uint32_t r=load(&fr), end=load(&fw);
++  while(r!=end) {
++    current=frames[r%FRAMES].state; observe(frames[r%FRAMES].ms);
++    save(&fr,++r);
++  }
++}
+ void relay_device_task(void) {
+-  bool mounted=tud_mounted();
++  if(!started) return; /* USB pump may tick before relay_start configures GP14. */
++  bool vbus=gpio_get(14);
++  if(!vbus_known || vbus!=vbus_present) {
++    vbus_known=true; vbus_present=vbus;
++    if(vbus) tud_connect();
++    else {
++      tud_disconnect();
++      /* The pinned RP2 DCD forces VBUS detection and otherwise reports
++       * physical unplug as suspend. Notify TinyUSB under its pump owner. */
++      dcd_event_bus_signal(0,DCD_EVENT_UNPLUGGED,__get_current_exception()!=0);
++    }
++  }
++  bool mounted=vbus && tud_mounted();
+   if(!mounted) {
+-    save(&fr,load(&fw)); taking=false; online=false; memset(&current,0,sizeof(current));
+-    memset(&observed,0,sizeof(observed)); return;
++    observe_pending(); taking=false; online=false;
++    protocol=HID_PROTOCOL_REPORT; idle_rate=0; save(&led_request,0);
++    return;
++  }
++  if(!online) {
++    /* Speak offline input, but send only the latest held state to the PC.
++     * Keeping observed avoids repeating speech for a held key on attach. */
++    observe_pending(); online=true; taking=true; phase=0;
++    memset(&sent,255,sizeof(sent));
+   }
+-  if(!online) { save(&fr,load(&fw)); online=true; taking=true; phase=0; memset(&sent,255,sizeof(sent)); }
+   if(tud_suspended()) {
+     if(load(&fw)!=load(&fr)) tud_remote_wakeup();
+     return;

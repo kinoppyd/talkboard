@@ -1,0 +1,422 @@
+From bfb50ca9aa06d8a518c4ef954de7762502d03806 Mon Sep 17 00:00:00 2001
+From: kinoppyd <ppyd@kinoppyd.dev>
+Date: Mon, 12 Oct 2026 10:15:37 +0900
+Subject: [PATCH] Add dual-core HID forwarding, LED output and bounded
+ observation
+
+---
+ .../picoruby-hid-relay/include/hid_relay.h    |   9 +
+ .../ports/rp2040/hid_relay.c                  | 194 ++++++++++++++++++
+ .../picoruby-machine/ports/rp2040/machine.c   |  15 ++
+ .../ports/rp2040/usb_descriptors.c            |  44 +++-
+ .../picoruby-usb-hid/ports/rp2040/usb-hid.c   |   3 +
+ 5 files changed, 256 insertions(+), 9 deletions(-)
+ create mode 100644 mrbgems/picoruby-hid-relay/include/hid_relay.h
+ create mode 100644 mrbgems/picoruby-hid-relay/ports/rp2040/hid_relay.c
+
+diff --git a/mrbgems/picoruby-hid-relay/include/hid_relay.h b/mrbgems/picoruby-hid-relay/include/hid_relay.h
+new file mode 100644
+index 00000000..78c94514
+--- /dev/null
++++ b/mrbgems/picoruby-hid-relay/include/hid_relay.h
+@@ -0,0 +1,9 @@
++#pragma once
++#include <stdbool.h>
++#include <stdint.h>
++typedef struct { uint32_t ms, generation; uint8_t key, modifiers; } relay_event;
++void relay_start(void);
++void relay_device_task(void);
++bool relay_read_event(relay_event *);
++uint32_t relay_generation(void);
++uint32_t relay_errors(void);
+diff --git a/mrbgems/picoruby-hid-relay/ports/rp2040/hid_relay.c b/mrbgems/picoruby-hid-relay/ports/rp2040/hid_relay.c
+new file mode 100644
+index 00000000..598596b0
+--- /dev/null
++++ b/mrbgems/picoruby-hid-relay/ports/rp2040/hid_relay.c
+@@ -0,0 +1,194 @@
++#ifdef TALKBOARD_RELAY
++#include "../../include/hid_relay.h"
++#include "../../include/relay_core.h"
++#include "pico/stdlib.h"
++#include "pico/multicore.h"
++#include "hardware/dma.h"
++#include "hardware/sync.h"
++#include "pio_usb.h"
++#include "tusb.h"
++#include <string.h>
++#define PORTS 4
++#define FRAMES 32
++#define EVENTS 128
++typedef struct { relay_state state; uint32_t ms; } frame;
++typedef struct {
++  relay_layout layout;
++  relay_state reports[RELAY_REPORTS];
++  uint8_t addr, instance, led_id, led_buf[64], sent_led;
++  bool active, pending, led_busy, led_valid;
++} port;
++static port ports[PORTS]; /* owned by core1 */
++static frame frames[FRAMES];
++static uint32_t fw,fr,led_request,errors;
++static relay_event events[EVENTS];
++static uint32_t ew,er,generation;
++static relay_state current, observed, sent;
++static uint8_t protocol=HID_PROTOCOL_REPORT, phase;
++static bool taking, online;
++static uint8_t idle_rate;
++static uint32_t last_keyboard_ms;
++static inline uint32_t load(uint32_t *p) { return __atomic_load_n(p,__ATOMIC_ACQUIRE); }
++static inline void save(uint32_t *p,uint32_t v) { __atomic_store_n(p,v,__ATOMIC_RELEASE); }
++static void error(void) { __atomic_fetch_add(&errors,1,__ATOMIC_RELAXED); }
++static port *find_port(uint8_t a,uint8_t i) {
++  for(int n=0;n<PORTS;n++) if(ports[n].active && ports[n].addr==a && ports[n].instance==i) return &ports[n];
++  return NULL;
++}
++static bool room(void) { return load(&fw)-load(&fr)<FRAMES; }
++static void snapshot(void) {
++  /* Each outstanding receive reserves one slot in the host loop. */
++  if(!room()) { error(); return; }
++  uint32_t w=load(&fw); frame *f=&frames[w%FRAMES]; memset(f,0,sizeof(*f));
++  f->ms=to_ms_since_boot(get_absolute_time()); unsigned nc=0;
++  for(int p=0;p<PORTS;p++) if(ports[p].active) for(int r=0;r<RELAY_REPORTS;r++) {
++    relay_state *s=&ports[p].reports[r];
++    for(int j=0;j<32;j++) f->state.keys[j]|=s->keys[j];
++    f->state.system|=s->system;
++    for(int j=0;j<8;j++) if(s->consumer[j]) {
++      bool exists=false; for(unsigned k=0;k<nc;k++) if(f->state.consumer[k]==s->consumer[j]) exists=true;
++      if(!exists && nc<8) f->state.consumer[nc++]=s->consumer[j];
++      else if(!exists) error();
++    }
++  }
++  save(&fw,w+1);
++}
++void tuh_hid_mount_cb(uint8_t a,uint8_t i,const uint8_t *d,uint16_t len) {
++  for(int n=0;n<PORTS;n++) if(!ports[n].active) {
++    port *p=&ports[n]; memset(p,0,sizeof(*p));
++    if(!d || !relay_parse(&p->layout,d,len)) { error(); return; }
++    p->addr=a; p->instance=i; p->active=true; p->sent_led=255;
++    return;
++  }
++  error();
++}
++static bool refresh;
++void tuh_hid_umount_cb(uint8_t a,uint8_t i) {
++  port *p=find_port(a,i); if(p) { memset(p,0,sizeof(*p)); refresh=true; }
++}
++void tuh_hid_report_received_cb(uint8_t a,uint8_t i,const uint8_t *data,uint16_t len) {
++  port *p=find_port(a,i); if(!p) return; p->pending=false;
++  uint8_t id=p->layout.numbered && len?data[0]:0;
++  int ri=-1; for(int r=0;r<p->layout.reports;r++) if(p->layout.ids[r]==id) ri=r;
++  relay_state s;
++  if(ri<0 || !relay_decode(&p->layout,data,len,&s)) { error(); return; }
++  if(memcmp(&s,&p->reports[ri],sizeof(s))) { p->reports[ri]=s; snapshot(); }
++}
++void tuh_hid_set_report_complete_cb(uint8_t a,uint8_t i,uint8_t id,uint8_t type,uint16_t len) {
++  (void)id; (void)type; port *p=find_port(a,i); if(!p) return;
++  p->led_busy=false; if(!len) { p->led_valid=false; error(); }
++}
++static void host_main(void) {
++  pio_usb_configuration_t cfg=PIO_USB_DEFAULT_CONFIG;
++  cfg.pin_dp=10; cfg.tx_ch=dma_claim_unused_channel(true);
++  tuh_configure(1,TUH_CFGID_RPI_PIO_USB_CONFIGURATION,&cfg);
++  tuh_hid_set_default_protocol(HID_PROTOCOL_REPORT);
++  tuh_init(1);
++  /* External protected supply powers the keyboard; GP12 gates its switch. */
++  gpio_init(12); gpio_set_dir(12,GPIO_OUT); gpio_put(12,1);
++  gpio_init(13); gpio_set_dir(13,GPIO_IN); gpio_pull_up(13);
++  bool power_fault=false;
++  while(true) {
++    tuh_task();
++    if(!power_fault && !gpio_get(13)) { gpio_put(12,0); power_fault=true; error(); }
++    unsigned pending=0; for(int n=0;n<PORTS;n++) pending+=ports[n].pending;
++    if(refresh && FRAMES-(load(&fw)-load(&fr))>pending) { snapshot(); refresh=false; }
++    /* Separate receives prevent an idle media endpoint starving the keyboard. */
++    for(unsigned n=0;n<PORTS;n++) {
++      port *p=&ports[n];
++      if(p->active && !p->pending && FRAMES-(load(&fw)-load(&fr))>pending &&
++         tuh_hid_receive_ready(p->addr,p->instance)) {
++        p->pending=tuh_hid_receive_report(p->addr,p->instance); pending+=p->pending;
++      }
++    }
++    for(int n=0;n<PORTS;n++) {
++      port *p=&ports[n]; uint8_t leds=load(&led_request);
++      if(!p->active || p->led_busy || (p->led_valid && p->sent_led==leds)) continue;
++      for(int r=0;r<p->layout.reports;r++) {
++        uint8_t id=p->layout.ids[r]; size_t len=relay_led_report(&p->layout,id,leds,p->led_buf);
++        if(!len) continue;
++        if(tuh_hid_set_report(p->addr,p->instance,id,HID_REPORT_TYPE_OUTPUT,p->led_buf,len)) {
++          p->led_busy=true; p->sent_led=leds; p->led_valid=true;
++        }
++        break;
++      }
++    }
++    tight_loop_contents();
++  }
++}
++static uint32_t host_stack[2048];
++void relay_start(void) { multicore_launch_core1_with_stack(host_main,host_stack,sizeof(host_stack)); }
++static void observe(uint32_t ms) {
++  uint8_t mods=current.keys[28];
++  for(unsigned u=4;u<224;u++) if((current.keys[u/8]&~observed.keys[u/8])&(1u<<(u%8))) {
++    uint32_t w=load(&ew);
++    if(w-load(&er)==EVENTS) { __atomic_fetch_add(&generation,1,__ATOMIC_RELEASE); continue; }
++    events[w%EVENTS]=(relay_event){ms,load(&generation),u,mods}; save(&ew,w+1);
++  }
++  observed=current;
++}
++static bool keyboard_send(void) {
++  if(!tud_hid_n_ready(0)) return false;
++  uint8_t boot[8];
++  if(protocol==HID_PROTOCOL_BOOT) { relay_boot_report(&current,boot); return tud_hid_n_report(0,0,boot,8); }
++  return tud_hid_n_report(0,0,current.keys,32);
++}
++void relay_device_task(void) {
++  bool mounted=tud_mounted();
++  if(!mounted) {
++    save(&fr,load(&fw)); taking=false; online=false; memset(&current,0,sizeof(current));
++    memset(&observed,0,sizeof(observed)); return;
++  }
++  if(!online) { save(&fr,load(&fw)); online=true; taking=true; phase=0; memset(&sent,255,sizeof(sent)); }
++  if(tud_suspended()) {
++    if(load(&fw)!=load(&fr)) tud_remote_wakeup();
++    return;
++  }
++  uint32_t r=load(&fr);
++  if(!taking && r!=load(&fw)) {
++    current=frames[r%FRAMES].state; observe(frames[r%FRAMES].ms);
++    save(&fr,r+1); phase=0; taking=true;
++  }
++  if(taking) {
++    if(phase==0 && (!memcmp(sent.keys,current.keys,32) || keyboard_send())) {
++      memcpy(sent.keys,current.keys,32); phase=1; last_keyboard_ms=to_ms_since_boot(get_absolute_time());
++    }
++    if(phase==1 && (!memcmp(sent.consumer,current.consumer,16) ||
++        (tud_hid_n_ready(2) && tud_hid_n_report(2,1,current.consumer,16)))) {
++      memcpy(sent.consumer,current.consumer,16); phase=2;
++    }
++    if(phase==2 && (sent.system==current.system ||
++        (tud_hid_n_ready(2) && tud_hid_n_report(2,2,&current.system,1)))) {
++      sent.system=current.system; phase=0; taking=false;
++    }
++  } else if(idle_rate && to_ms_since_boot(get_absolute_time())-last_keyboard_ms>=4u*idle_rate) {
++    if(keyboard_send()) last_keyboard_ms=to_ms_since_boot(get_absolute_time());
++  }
++}
++uint16_t tud_hid_get_report_cb(uint8_t i,uint8_t id,hid_report_type_t type,uint8_t *b,uint16_t len) {
++  if(type==HID_REPORT_TYPE_OUTPUT && i==0 && len) { b[0]=load(&led_request); return 1; }
++  if(type!=HID_REPORT_TYPE_INPUT) return 0;
++  const void *src=NULL; size_t n=0; uint8_t boot[8];
++  if(i==0) { src=current.keys; n=32; if(protocol==HID_PROTOCOL_BOOT) { relay_boot_report(&current,boot); src=boot; n=8; } }
++  if(i==2 && id==1) { src=current.consumer; n=16; }
++  if(i==2 && id==2) { src=&current.system; n=1; }
++  if(!src) return 0;
++  if(n>len) n=len;
++  memcpy(b,src,n); return n;
++}
++void tud_hid_set_report_cb(uint8_t i,uint8_t id,hid_report_type_t t,const uint8_t *b,uint16_t len) {
++  (void)id; if(i==0 && t==HID_REPORT_TYPE_OUTPUT && len) save(&led_request,b[0]&31);
++}
++void tud_hid_set_protocol_cb(uint8_t i,uint8_t p) {
++  if(i==0) { protocol=p; phase=0; taking=true; memset(sent.keys,255,32); }
++}
++bool tud_hid_set_idle_cb(uint8_t i,uint8_t rate) { if(i==0) idle_rate=rate; return true; }
++void tud_hid_report_complete_cb(uint8_t i,const uint8_t *r,uint16_t n) { (void)i; (void)r; (void)n; }
++bool relay_read_event(relay_event *e) {
++  uint32_t flags=save_and_disable_interrupts(); uint32_t r=load(&er);
++  bool ok=r!=load(&ew); if(ok) { *e=events[r%EVENTS]; save(&er,r+1); }
++  restore_interrupts(flags); return ok;
++}
++uint32_t relay_generation(void) { return load(&generation); }
++uint32_t relay_errors(void) { return load(&errors); }
++#endif
+diff --git a/mrbgems/picoruby-machine/ports/rp2040/machine.c b/mrbgems/picoruby-machine/ports/rp2040/machine.c
+index dc8eb26e..f8b25503 100644
+--- a/mrbgems/picoruby-machine/ports/rp2040/machine.c
++++ b/mrbgems/picoruby-machine/ports/rp2040/machine.c
+@@ -28,6 +28,9 @@
+ #include <stdlib.h>
+ #include <time.h>
+ #include <tusb.h>
++#ifdef TALKBOARD_RELAY
++#include "../../../picoruby-hid-relay/include/hid_relay.h"
++#endif
+ 
+ #include "hardware/gpio.h"
+ #include "hardware/structs/ioqspi.h"
+@@ -221,6 +224,9 @@ usb_pump_worker(void)
+   if (mutex_try_enter(&usb_mutex, NULL)) {
+     in_usb_pump = true;
+     tud_task();
++#ifdef TALKBOARD_RELAY
++    relay_device_task();
++#endif
+     usb_cdc_drain();
+     in_usb_pump = false;
+     mutex_exit(&usb_mutex);
+@@ -361,6 +367,9 @@ picorb_hal_init(void)
+   irq_set_enabled((uint)usb_pump_irq_num, true);
+ 
+   tud_init(TUD_OPT_RHPORT);
++#ifdef TALKBOARD_RELAY
++  relay_start();
++#endif
+   irq_add_shared_handler(USBCTRL_IRQ, usb_irq_handler,
+       PICO_SHARED_IRQ_HANDLER_LOWEST_ORDER_PRIORITY);
+ }
+@@ -472,6 +481,9 @@ picorb_hal_cdc_write(uint8_t itf, const void *buf, int nbytes, uint32_t timeout_
+       }
+       in_usb_pump = true;
+       tud_task();
++#ifdef TALKBOARD_RELAY
++    relay_device_task();
++#endif
+       in_usb_pump = false;
+       tud_cdc_n_write_flush(itf);
+     }
+@@ -630,6 +642,9 @@ Machine_tud_task(void)
+   if (mutex_enter_timeout_ms(&usb_mutex, 10)) {
+     in_usb_pump = true;
+     tud_task();
++#ifdef TALKBOARD_RELAY
++    relay_device_task();
++#endif
+     usb_cdc_drain();
+     in_usb_pump = false;
+     mutex_exit(&usb_mutex);
+diff --git a/mrbgems/picoruby-r2p2/ports/rp2040/usb_descriptors.c b/mrbgems/picoruby-r2p2/ports/rp2040/usb_descriptors.c
+index 8f27ace7..dd9b4aad 100644
+--- a/mrbgems/picoruby-r2p2/ports/rp2040/usb_descriptors.c
++++ b/mrbgems/picoruby-r2p2/ports/rp2040/usb_descriptors.c
+@@ -31,6 +31,15 @@
+ 
+ #include "bsp/board_api.h"
+ #include "tusb.h"
++#ifdef TALKBOARD_RELAY
++#define RELAY_INTERVAL 1
++#define RELAY_POWER_ATTRIBUTES (TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP | TUSB_DESC_CONFIG_ATT_SELF_POWERED)
++#define RELAY_PRODUCT "Talkboard HID relay PoC"
++#else
++#define RELAY_INTERVAL 10
++#define RELAY_POWER_ATTRIBUTES TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP
++#define RELAY_PRODUCT "R2P2"
++#endif
+ 
+ /* A combination of interfaces must have a unique product id, since PC will save device driver after the first plug.
+  * Same VID/PID with different interface e.g MSC (first), then CDC (later) will possibly cause system error on PC.
+@@ -180,7 +189,15 @@ enum
+ // HID Report Descriptor for Keyboard
+ uint8_t const desc_hid_keyboard_report[] =
+ {
++#ifdef TALKBOARD_RELAY
++  0x05,0x01, 0x09,0x06, 0xa1,0x01,
++  0x05,0x07, 0x19,0x00, 0x2a,0xff,0x00,
++  0x15,0x00, 0x25,0x01, 0x75,0x01, 0x96,0x00,0x01, 0x81,0x02,
++  0x05,0x08, 0x19,0x01, 0x29,0x05, 0x95,0x05, 0x91,0x02,
++  0x75,0x03, 0x95,0x01, 0x91,0x01, 0xc0
++#else
+   TUD_HID_REPORT_DESC_KEYBOARD()
++#endif
+ };
+ 
+ // HID Report Descriptor for Mouse
+@@ -192,7 +209,16 @@ uint8_t const desc_hid_mouse_report[] =
+ // HID Report Descriptor for Consumer Control
+ uint8_t const desc_hid_consumer_report[] =
+ {
++#ifdef TALKBOARD_RELAY
++  0x05,0x0c, 0x09,0x01, 0xa1,0x01, 0x85,0x01,
++  0x15,0x00, 0x26,0xff,0x03, 0x19,0x00, 0x2a,0xff,0x03,
++  0x75,0x10, 0x95,0x08, 0x81,0x00, 0xc0,
++  0x05,0x01, 0x09,0x80, 0xa1,0x01, 0x85,0x02,
++  0x19,0x81, 0x29,0x88, 0x15,0x00, 0x25,0x01,
++  0x75,0x01, 0x95,0x08, 0x81,0x02, 0xc0
++#else
+   TUD_HID_REPORT_DESC_CONSUMER()
++#endif
+ };
+ 
+ // Required callback for HID report descriptor
+@@ -212,7 +238,7 @@ uint8_t const desc_fs_configuration[] =
+ {
+   // Config number, interface count, string index, total length, attribute, power in mA
+   // Remote wakeup attribute allows the keyboard to wake up a suspended host
+-  TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 100),
++  TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, RELAY_POWER_ATTRIBUTES, 100),
+ 
+   // 1st CDC: Interface number, string index, EP notification address and size, EP data address (out, in) and size.
+   TUD_CDC_DESCRIPTOR(ITF_NUM_CDC_0, 4, EPNUM_CDC_0_NOTIF, 8, EPNUM_CDC_0_OUT, EPNUM_CDC_0_IN, 64),
+@@ -224,13 +250,13 @@ uint8_t const desc_fs_configuration[] =
+   TUD_CDC_DESCRIPTOR(ITF_NUM_CDC_2, 6, EPNUM_CDC_2_NOTIF, 8, EPNUM_CDC_2_OUT, EPNUM_CDC_2_IN, 64),
+ 
+   // HID Keyboard
+-  TUD_HID_DESCRIPTOR(ITF_NUM_HID_KEYBOARD, 7, HID_ITF_PROTOCOL_KEYBOARD, sizeof(desc_hid_keyboard_report), EPNUM_HID_KEYBOARD, CFG_TUD_HID_EP_BUFSIZE, 10),
++  TUD_HID_DESCRIPTOR(ITF_NUM_HID_KEYBOARD, 7, HID_ITF_PROTOCOL_KEYBOARD, sizeof(desc_hid_keyboard_report), EPNUM_HID_KEYBOARD, CFG_TUD_HID_EP_BUFSIZE, RELAY_INTERVAL),
+ 
+   // HID Mouse
+-  TUD_HID_DESCRIPTOR(ITF_NUM_HID_MOUSE, 8, HID_ITF_PROTOCOL_NONE, sizeof(desc_hid_mouse_report), EPNUM_HID_MOUSE, CFG_TUD_HID_EP_BUFSIZE, 10),
++  TUD_HID_DESCRIPTOR(ITF_NUM_HID_MOUSE, 8, HID_ITF_PROTOCOL_NONE, sizeof(desc_hid_mouse_report), EPNUM_HID_MOUSE, CFG_TUD_HID_EP_BUFSIZE, RELAY_INTERVAL),
+ 
+   // HID Consumer Control
+-  TUD_HID_DESCRIPTOR(ITF_NUM_HID_CONSUMER, 9, HID_ITF_PROTOCOL_NONE, sizeof(desc_hid_consumer_report), EPNUM_HID_CONSUMER, CFG_TUD_HID_EP_BUFSIZE, 10),
++  TUD_HID_DESCRIPTOR(ITF_NUM_HID_CONSUMER, 9, HID_ITF_PROTOCOL_NONE, sizeof(desc_hid_consumer_report), EPNUM_HID_CONSUMER, CFG_TUD_HID_EP_BUFSIZE, RELAY_INTERVAL),
+ };
+ 
+ #if TUD_OPT_HIGH_SPEED
+@@ -241,7 +267,7 @@ uint8_t const desc_hs_configuration[] =
+ {
+   // Config number, interface count, string index, total length, attribute, power in mA
+   // Remote wakeup attribute allows the keyboard to wake up a suspended host
+-  TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 100),
++  TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, RELAY_POWER_ATTRIBUTES, 100),
+ 
+   // 1st CDC: Interface number, string index, EP notification address and size, EP data address (out, in) and size.
+   TUD_CDC_DESCRIPTOR(ITF_NUM_CDC_0, 4, EPNUM_CDC_0_NOTIF, 8, EPNUM_CDC_0_OUT, EPNUM_CDC_0_IN, 512),
+@@ -253,13 +279,13 @@ uint8_t const desc_hs_configuration[] =
+   TUD_CDC_DESCRIPTOR(ITF_NUM_CDC_2, 6, EPNUM_CDC_2_NOTIF, 8, EPNUM_CDC_2_OUT, EPNUM_CDC_2_IN, 512),
+ 
+   // HID Keyboard
+-  TUD_HID_DESCRIPTOR(ITF_NUM_HID_KEYBOARD, 7, HID_ITF_PROTOCOL_KEYBOARD, sizeof(desc_hid_keyboard_report), EPNUM_HID_KEYBOARD, CFG_TUD_HID_EP_BUFSIZE, 10),
++  TUD_HID_DESCRIPTOR(ITF_NUM_HID_KEYBOARD, 7, HID_ITF_PROTOCOL_KEYBOARD, sizeof(desc_hid_keyboard_report), EPNUM_HID_KEYBOARD, CFG_TUD_HID_EP_BUFSIZE, RELAY_INTERVAL),
+ 
+   // HID Mouse
+-  TUD_HID_DESCRIPTOR(ITF_NUM_HID_MOUSE, 8, HID_ITF_PROTOCOL_NONE, sizeof(desc_hid_mouse_report), EPNUM_HID_MOUSE, CFG_TUD_HID_EP_BUFSIZE, 10),
++  TUD_HID_DESCRIPTOR(ITF_NUM_HID_MOUSE, 8, HID_ITF_PROTOCOL_NONE, sizeof(desc_hid_mouse_report), EPNUM_HID_MOUSE, CFG_TUD_HID_EP_BUFSIZE, RELAY_INTERVAL),
+ 
+   // HID Consumer Control
+-  TUD_HID_DESCRIPTOR(ITF_NUM_HID_CONSUMER, 9, HID_ITF_PROTOCOL_NONE, sizeof(desc_hid_consumer_report), EPNUM_HID_CONSUMER, CFG_TUD_HID_EP_BUFSIZE, 10),
++  TUD_HID_DESCRIPTOR(ITF_NUM_HID_CONSUMER, 9, HID_ITF_PROTOCOL_NONE, sizeof(desc_hid_consumer_report), EPNUM_HID_CONSUMER, CFG_TUD_HID_EP_BUFSIZE, RELAY_INTERVAL),
+ };
+ 
+ // other speed configuration
+@@ -343,7 +369,7 @@ char const *string_desc_arr[] =
+ {
+   (const char[]) { 0x09, 0x04 }, // 0: is supported language is English (0x0409)
+   "PicoRuby",                    // 1: Manufacturer
+-  "R2P2",                        // 2: Product
++  RELAY_PRODUCT,                        // 2: Product
+   NULL,                          // 3: Serials will use unique ID if possible
+   "PicoRuby CDC",                // 4: CDC Interface 0 (Application)
+   "PicoRuby CDC Debug",          // 5: CDC Interface 1 (Debug)
+diff --git a/mrbgems/picoruby-usb-hid/ports/rp2040/usb-hid.c b/mrbgems/picoruby-usb-hid/ports/rp2040/usb-hid.c
+index 9cc695e9..1dea457c 100644
+--- a/mrbgems/picoruby-usb-hid/ports/rp2040/usb-hid.c
++++ b/mrbgems/picoruby-usb-hid/ports/rp2040/usb-hid.c
+@@ -21,6 +21,7 @@ static uint8_t keyboard_led_state = 0;
+ // TinyUSB callbacks (required by TinyUSB)
+ //================================================================
+ 
++#ifndef TALKBOARD_RELAY
+ // Invoked when received GET_REPORT control request
+ uint16_t
+ tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
+@@ -64,6 +65,8 @@ tud_hid_report_complete_cb(uint8_t instance, uint8_t const* report,
+   (void) len;
+ }
+ 
++#endif // !TALKBOARD_RELAY
++
+ //================================================================
+ // Public API functions (RP2040-specific implementation)
+ //================================================================
+-- 
+2.48.1

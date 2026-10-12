@@ -1,0 +1,51 @@
+From 7ce18b85aef9d2f5d25cfc525f257c2c8a4db65e Mon Sep 17 00:00:00 2001
+From: kinoppyd <ppyd@kinoppyd.dev>
+Date: Mon, 12 Oct 2026 10:15:37 +0900
+Subject: [PATCH] Expose read-only HID observation and diagnostics to PicoRuby
+
+---
+ mrbgems/picoruby-hid-relay/mrbgem.rake     |  6 ++++++
+ mrbgems/picoruby-hid-relay/src/hid_relay.c | 19 +++++++++++++++++++
+ 2 files changed, 25 insertions(+)
+ create mode 100644 mrbgems/picoruby-hid-relay/mrbgem.rake
+ create mode 100644 mrbgems/picoruby-hid-relay/src/hid_relay.c
+
+diff --git a/mrbgems/picoruby-hid-relay/mrbgem.rake b/mrbgems/picoruby-hid-relay/mrbgem.rake
+new file mode 100644
+index 00000000..7664fb4b
+--- /dev/null
++++ b/mrbgems/picoruby-hid-relay/mrbgem.rake
+@@ -0,0 +1,6 @@
++MRuby::Gem::Specification.new('picoruby-hid-relay') do |spec|
++  spec.license = 'MIT'
++  spec.author = 'Talkboard contributors'
++  spec.summary = 'Bounded USB keyboard observation API for Talkboard'
++  spec.add_dependency 'picoruby-machine'
++end
+diff --git a/mrbgems/picoruby-hid-relay/src/hid_relay.c b/mrbgems/picoruby-hid-relay/src/hid_relay.c
+new file mode 100644
+index 00000000..000503f7
+--- /dev/null
++++ b/mrbgems/picoruby-hid-relay/src/hid_relay.c
+@@ -0,0 +1,19 @@
++#include <mruby.h>
++#include <mruby/array.h>
++#include "../include/hid_relay.h"
++static mrb_value read_event(mrb_state *mrb, mrb_value self) {
++  (void)self; relay_event e;
++  if(!relay_read_event(&e)) return mrb_nil_value();
++  mrb_value a[4]={mrb_int_value(mrb,e.ms),mrb_int_value(mrb,e.key),
++    mrb_int_value(mrb,e.modifiers),mrb_int_value(mrb,e.generation)};
++  return mrb_ary_new_from_values(mrb,4,a);
++}
++static mrb_value generation(mrb_state *mrb,mrb_value self) { (void)self; return mrb_int_value(mrb,relay_generation()); }
++static mrb_value errors(mrb_state *mrb,mrb_value self) { (void)self; return mrb_int_value(mrb,relay_errors()); }
++void mrb_picoruby_hid_relay_gem_init(mrb_state *mrb) {
++  struct RClass *m=mrb_define_module(mrb,"HIDRelay");
++  mrb_define_class_method(mrb,m,"read",read_event,MRB_ARGS_NONE());
++  mrb_define_class_method(mrb,m,"generation",generation,MRB_ARGS_NONE());
++  mrb_define_class_method(mrb,m,"errors",errors,MRB_ARGS_NONE());
++}
++void mrb_picoruby_hid_relay_gem_final(mrb_state *mrb) { (void)mrb; }
+-- 
+2.48.1

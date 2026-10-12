@@ -1,0 +1,182 @@
+From add7eebf1ec41d594055aa4827fb1c9ec0f2c81f Mon Sep 17 00:00:00 2001
+From: kinoppyd <ppyd@kinoppyd.dev>
+Date: Mon, 12 Oct 2026 10:15:37 +0900
+Subject: [PATCH] Add bounded HID descriptor decoding and report conversion
+
+---
+ .../picoruby-hid-relay/include/relay_core.h   |  30 +++++
+ .../ports/common/relay_core.c                 | 126 ++++++++++++++++++
+ 2 files changed, 156 insertions(+)
+ create mode 100644 mrbgems/picoruby-hid-relay/include/relay_core.h
+ create mode 100644 mrbgems/picoruby-hid-relay/ports/common/relay_core.c
+
+diff --git a/mrbgems/picoruby-hid-relay/include/relay_core.h b/mrbgems/picoruby-hid-relay/include/relay_core.h
+new file mode 100644
+index 00000000..928e36c7
+--- /dev/null
++++ b/mrbgems/picoruby-hid-relay/include/relay_core.h
+@@ -0,0 +1,30 @@
++#ifndef TALKBOARD_RELAY_CORE_H
++#define TALKBOARD_RELAY_CORE_H
++#include <stdbool.h>
++#include <stdint.h>
++#include <stddef.h>
++/* Deliberately bounded descriptor subset; unsupported layouts fail closed. */
++#define RELAY_FIELDS 48
++#define RELAY_REPORTS 8
++#define RELAY_USAGES 32
++typedef struct {
++  int32_t logical_min;
++  uint16_t offset, page, minimum, maximum, count, usages[RELAY_USAGES];
++  uint8_t size, id, kind, flags, usage_count;
++} relay_field;
++typedef struct {
++  relay_field fields[RELAY_FIELDS];
++  uint16_t bits[RELAY_REPORTS][3];
++  uint8_t ids[RELAY_REPORTS], reports, count;
++  bool numbered;
++} relay_layout;
++typedef struct {
++  uint8_t keys[32]; /* Keyboard Usage 0..255; modifiers at 224..231. */
++  uint16_t consumer[8];
++  uint8_t system; /* Usage 0x81..0x88 */
++} relay_state;
++bool relay_parse(relay_layout *, const uint8_t *, size_t);
++bool relay_decode(const relay_layout *, const uint8_t *, size_t, relay_state *);
++size_t relay_led_report(const relay_layout *, uint8_t id, uint8_t leds, uint8_t *out);
++void relay_boot_report(const relay_state *, uint8_t out[8]);
++#endif
+diff --git a/mrbgems/picoruby-hid-relay/ports/common/relay_core.c b/mrbgems/picoruby-hid-relay/ports/common/relay_core.c
+new file mode 100644
+index 00000000..16920218
+--- /dev/null
++++ b/mrbgems/picoruby-hid-relay/ports/common/relay_core.c
+@@ -0,0 +1,126 @@
++#include "../../include/relay_core.h"
++#include <string.h>
++typedef struct { int32_t logical_min; uint16_t page, count; uint8_t size, id; } globals;
++static int report_index(relay_layout *l, uint8_t id) {
++  for (int i=0;i<l->reports;i++) if(l->ids[i]==id) return i;
++  if(l->reports==RELAY_REPORTS) return -1;
++  l->ids[l->reports]=id; return l->reports++;
++}
++bool relay_parse(relay_layout *l, const uint8_t *d, size_t len) {
++  memset(l,0,sizeof(*l)); globals g={0}, stack[4]; unsigned depth=0;
++  uint16_t usages[RELAY_USAGES]={0}, minimum=0, maximum=0; unsigned n=0;
++  bool has_min=false, has_max=false;
++  for(size_t p=0;p<len;) {
++    uint8_t b=d[p++]; if(b==0xfe) return false;
++    unsigned bytes=b&3; if(bytes==3) bytes=4;
++    if(p+bytes>len) return false;
++    uint32_t v=0; for(unsigned j=0;j<bytes;j++) v|=(uint32_t)d[p++]<<(8*j);
++    unsigned type=(b>>2)&3, tag=b>>4;
++    if(type==1) {
++      switch(tag) {
++        case 0: if(v>65535) return false; g.page=v; break;
++        case 1:
++          g.logical_min=bytes==1?(int8_t)v:bytes==2?(int16_t)v:(int32_t)v;
++          break;
++        case 7: if(v>32) return false; g.size=v; break;
++        case 8: if(!v || v>255) return false; g.id=v; l->numbered=true; break;
++        case 9: if(v>512) return false; g.count=v; break;
++        case 10: if(depth==4) return false; stack[depth++]=g; break;
++        case 11: if(!depth) return false; g=stack[--depth]; break;
++        default: break;
++      }
++    } else if(type==2) {
++      if(bytes==4 && (v>>16)!=g.page) return false;
++      if(tag==0) { if(n==RELAY_USAGES) return false; usages[n++]=v; }
++      if(tag==1) { minimum=v; has_min=true; }
++      if(tag==2) { maximum=v; has_max=true; }
++    } else if(type==0) {
++      int kind=tag==8?0:tag==9?1:tag==11?2:-1;
++      if(kind>=0) {
++        int r=report_index(l,g.id); if(r<0 || !g.size || !g.count) return false;
++        unsigned end=l->bits[r][kind]+g.size*g.count;
++        if(end>512 || (has_min!=has_max) || (has_min && maximum<minimum)) return false;
++        if(!(v&1) && kind!=2) {
++          /* Relative fields and vendor-defined data are not keyboard state. */
++          if((g.page==7 || g.page==12 || g.page==8 || g.page==1) && !(v&4)) {
++            if(l->count==RELAY_FIELDS) return false;
++            relay_field *f=&l->fields[l->count++];
++            f->logical_min=g.logical_min;
++            f->offset=l->bits[r][kind]; f->page=g.page; f->minimum=minimum;
++            f->maximum=maximum; f->size=g.size; f->count=g.count; f->id=g.id;
++            f->kind=kind; f->flags=v; f->usage_count=n;
++            memcpy(f->usages,usages,n*sizeof(uint16_t));
++          }
++        }
++        l->bits[r][kind]=end;
++      }
++      n=0; minimum=maximum=0; has_min=has_max=false;
++    }
++  }
++  if(depth || !l->count) return false;
++  if(l->numbered) for(int i=0;i<l->reports;i++) if(!l->ids[i]) return false;
++  return true;
++}
++static uint32_t bits(const uint8_t *p, unsigned pos, unsigned size) {
++  uint32_t v=0; for(unsigned i=0;i<size;i++) v|=(uint32_t)((p[(pos+i)/8]>>((pos+i)%8))&1)<<i;
++  return v;
++}
++static uint16_t usage(const relay_field *f,unsigned i) {
++  if(f->usage_count) return f->usages[i<f->usage_count?i:f->usage_count-1];
++  return f->minimum+i<=f->maximum?f->minimum+i:0;
++}
++bool relay_decode(const relay_layout *l,const uint8_t *p,size_t len,relay_state *out) {
++  uint8_t id=0; if(l->numbered) { if(!len) return false; id=*p++; len--; }
++  int r=-1; for(int i=0;i<l->reports;i++) if(l->ids[i]==id) r=i;
++  if(r<0 || !l->bits[r][0] || len<(l->bits[r][0]+7u)/8u) return false;
++  memset(out,0,sizeof(*out)); unsigned consumers=0;
++  for(int k=0;k<l->count;k++) {
++    const relay_field *f=&l->fields[k]; if(f->id!=id || f->kind) continue;
++    for(unsigned i=0;i<f->count;i++) {
++      uint32_t v=bits(p,f->offset+i*f->size,f->size);
++      uint32_t u;
++      if(f->flags&2) u=usage(f,i);
++      else {
++        int64_t index=(int64_t)v-f->logical_min;
++        if(index<0) continue;
++        if(f->usage_count) {
++          if(index>=f->usage_count) continue;
++          u=f->usages[index];
++        } else {
++          if(index>(int64_t)f->maximum-f->minimum) continue;
++          u=f->minimum+index;
++        }
++      }
++      if(((f->flags&2) && !v) || !u) continue;
++      if(f->page==7) {
++        if(u>=1 && u<=3) return false; /* rollover/error: retain prior state */
++        if(u>255) return false;
++        out->keys[u/8]|=1u<<(u%8);
++      } else if(f->page==12) {
++        if(u>1023 || consumers==8) return false;
++        bool found=false; for(unsigned j=0;j<consumers;j++) if(out->consumer[j]==u) found=true;
++        if(!found) out->consumer[consumers++]=u;
++      } else if(f->page==1 && u>=0x81 && u<=0x88) out->system|=1u<<(u-0x81);
++    }
++  }
++  return true;
++}
++size_t relay_led_report(const relay_layout *l,uint8_t id,uint8_t leds,uint8_t *out) {
++  memset(out,0,64); bool found=false; unsigned length=0;
++  for(int r=0;r<l->reports;r++) if(l->ids[r]==id) length=(l->bits[r][1]+7)/8;
++  for(int k=0;k<l->count;k++) {
++    const relay_field *f=&l->fields[k];
++    if(f->id!=id || f->kind!=1 || f->page!=8 || !(f->flags&2)) continue;
++    for(unsigned i=0;i<f->count;i++) {
++      unsigned u=usage(f,i); if(u<1 || u>5) continue; found=true;
++      if(leds&(1u<<(u-1))) { unsigned bit=f->offset+i*f->size; out[bit/8]|=1u<<(bit%8); }
++    }
++  }
++  return found?length:0;
++}
++void relay_boot_report(const relay_state *s,uint8_t out[8]) {
++  memset(out,0,8); out[0]=s->keys[28]; unsigned n=0;
++  for(unsigned u=4;u<224;u++) if(s->keys[u/8]&(1u<<(u%8))) {
++    if(n==6) { memset(out+2,1,6); return; } out[2+n++]=u;
++  }
++}
+-- 
+2.48.1
