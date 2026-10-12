@@ -53,8 +53,9 @@ ruby tools/apply_relay_patches.rb repositories/picoruby-relay
 | 2 | 0002-hid-report-core.patch | 境界を検査するdescriptor解析、キー・Consumer・LED形式変換 |
 | 3 | 0003-hid-relay-runtime.patch | core1 Host、core0転送、LED、有限バッファと観測 |
 | 4 | 0004-ruby-observation-api.patch | HIDRelay.read/generation/errorsのRuby API |
+| 5 | 0005-standalone-observation.patch | PC未接続時の観測継続、GP14によるVBUS検出、再接続時の最新状態同期 |
 
-全4本を順次適用してからビルドします。中間段階で単独ビルドできるという意味ではありません。
+全5本を順次適用してからビルドします。中間段階で単独ビルドできるという意味ではありません。旧4本適用済みコピーは、ユーザー変更がないことを確認し5本目だけ `git apply --check` 後に適用するか、新しいクリーンコピーを作って全列を適用します。新UF2にはR12/R13のGP14検出配線も必要です。
 
 ## picotool
 
@@ -92,16 +93,18 @@ TALKBOARD_BUILD_DIR="$PWD/build/relay-fresh" \
 ## 書き込みと初回試験
 
 1. [回路の無通電チェック](hardware.md)を終え、キーボードを外す。
-2. PicoのUSBと外部5Vを両方外して電源を切る。外部給電だけ残すとBOOTSEL起動に入らないことがある。
+2. PicoのUSB・アダプタ・電池をすべて外して電源を切る。外部給電だけ残すとBOOTSEL起動に入らないことがある。
 3. BOOTSELを押しながらMacへUSB接続し、RP2350のUSBドライブ（通常 `RP2350`）が現れるのを確認する。
 4. 生成されたUF2をそのドライブへコピーする。接続先がPico 2 Wであることを確認してから行う。他の機器へ書き込まない。
-5. 自動再起動後、外部5Vを投入する。HOST_VBUSと各電源をテスターで測る。
+5. 自動再起動後、アダプタを接続しS1をEXTへ。HOST_VBUSと各電源、PC接続時のGP14約2.5Vをテスターで測る。
 6. US配列キーボードを下流USB-Aへ接続する。Macにキーボード識別画面が出たらUS/ANSIとして設定し、入力ソースもUS/ABCで試す。
 7. 空のテキストエディタで通常入力、Shift/Commandショートカット、Backspace、CapsLock LEDを確認する。
 8. `konnichiwa`、`shi`、`katta`、`n`等を入力する。音声はIC終了待ちで遅れてよいが、Macの入力が音声待ちで止まらないか確認する。
 9. 結果とキーボード機種・macOS版を記録する。未定だった機種に対応できないdescriptorがあれば、実機のdescriptorを基に解析器を拡張する。
 
 起動スクリプトは不要です。UF2の起動時に専用mainが走ります。CDCインターフェースは残りますが対話shellはありません。R2P2 DRIVEへファイルを書き込んで動かす構成でもありません。
+
+単独動作はUSBとアダプタを外し、保護付き18650を装着してS1をBATにします。同じUF2・同じRuby mainでキーボードと発声が動きます。[電池の配線・安全確認・PC着脱試験](standalone-power.md)を必ず先に実施してください。S1で電源を切り替える際は装置全体を停止し、PCからPicoだけに給電が残る状態で切り替えないでください。
 
 ## 症状別の確認
 
@@ -110,8 +113,9 @@ TALKBOARD_BUILD_DIR="$PWD/build/relay-fresh" \
 | buildでCYW43が未定義 | 専用構成・USE_WIFI=OFFを使っているか。通常のpico2_w構成は別物 |
 | picotool取得失敗 | 上記ローカルビルドとCMAKE_PREFIX_PATHを使う |
 | CMake source mismatch | TALKBOARD_BUILD_DIRで新しい出力先を指定 |
-| Macに現れない | データ対応ケーブル、UF2、電源、USB端子の取り違え |
-| キーボードが点灯しない | 外部5V、GP12、U3 /OC、HOST_VBUS。過電流で遮断した場合は両電源を切って確認 |
+| Macに現れない | データ対応ケーブル、UF2、電源、USB端子、R12/R13とGP14（約2.5V） |
+| キーボードが点灯しない | S1、選択後5V、電池保護・F1、GP12、U3 /OC、HOST_VBUS。過電流時は全電源を切って確認 |
+| PCなしで音声が止まる | 5本目Patch適用・再ビルドの確認。GP14はPCケーブルなしで約0V。BAT時のHOST_VBUSと電池電圧 |
 | キーの一部が来ない | NKRO/Report ID/interface数・長さ・解析対象Usageを確認。未対応機種の可能性 |
 | 音声だけ止まる | I²C配線、U1設定ピン、電源、RESET、アンプ。worker故障は再起動で復帰 |
 | 読みが途中で分かれる | 50msの末尾待ち。speech.rbのwait_msを調整し再ビルド |
