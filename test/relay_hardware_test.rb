@@ -9,9 +9,25 @@ class RelayHardwareTest < Minitest::Test
     assert_equal @parts.size, @by_ref.size
   end
   def test_power_isolation
-    assert_equal 'PC_VBUS_NC', @by_ref['MCU1']['40']
+    assert_equal 'PC_VBUS', @by_ref['MCU1']['40']
     assert_equal({ 'A'=>'+5V_EXT', 'K'=>'VSYS' }, @by_ref['D1'])
     assert_equal 'HOST_VBUS', @by_ref['J1']['1']
+  end
+  def test_battery_and_selector_isolate_power_sources
+    assert_equal({ 'PLUS'=>'BAT_POS', 'MINUS'=>'GND' }, @by_ref['BT1'])
+    assert_equal({ '1'=>'BAT_POS', '2'=>'BAT_FUSED' }, @by_ref['F1'])
+    assert_equal({ 'A_COM'=>'+5V_EXT', 'A_EXT'=>'ADAPTER5V', 'A_BAT'=>'BOOST5V',
+                   'B_COM'=>'BAT_FUSED', 'B_EXT'=>'NC', 'B_BAT'=>'BAT_SW' }, @by_ref['S1'])
+    assert_equal 'ADAPTER5V', @by_ref['J2']['POS']
+    assert_equal({ 'VIN'=>'BAT_SW', 'GND'=>'GND', 'VOUT'=>'BOOST5V', 'ENABLE'=>'NC' }, @by_ref['U4'])
+    assert_equal({ 'PLUS'=>'BAT_SW', 'MINUS'=>'GND' }, @by_ref['C15'])
+    assert_equal %w[MCU1 R12], @parts.select { |p| p['pins'].value?('PC_VBUS') }.map { |p| p['ref'] }.sort
+  end
+  def test_vbus_is_divided_before_gpio
+    assert_equal 'PC_PRESENT', @by_ref['MCU1']['19']
+    assert_equal({ '1'=>'PC_VBUS', '2'=>'PC_PRESENT' }, @by_ref['R12'])
+    assert_equal({ '1'=>'PC_PRESENT', '2'=>'GND' }, @by_ref['R13'])
+    %w[R12 R13].each { |r| assert_match(/10k ohm 1%/, @parts.find { |p| p['ref']==r }['part']) }
   end
   def test_gpio_contract
     assert_equal %w[RESET_N SDA SCL DP_GPIO DM_GPIO HOST_EN HOST_OC_N],

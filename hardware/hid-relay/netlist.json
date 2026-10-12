@@ -1,11 +1,11 @@
 {
   "title": "Talkboard HID relay PoC / net-label schematic",
-  "revision": 2,
+  "revision": 3,
   "notes": [
     "Every identical net label is connected. NC pins stay open.",
     "MCU1 numbers are physical header pin numbers, not GPIO numbers.",
-    "PC cable connects only to Pico micro-USB. Never wire EXT5V or HOST_VBUS to MCU1 pin40.",
-    "Power off BOTH supplies before wiring. External 5V must be on during operation."
+    "MCU1 pin40 connects ONLY to R12 for sensing; never connect it to the selected +5V_EXT rail.",
+    "Remove PC, adapter and battery before wiring. S1 selects adapter / OFF / battery; no charging circuit."
   ],
   "parts": [
     {
@@ -19,10 +19,11 @@
         "15": "DM_GPIO",
         "16": "HOST_EN",
         "17": "HOST_OC_N",
+        "19": "PC_PRESENT",
         "36": "+3V3",
         "38": "GND",
         "39": "VSYS",
-        "40": "PC_VBUS_NC"
+        "40": "PC_VBUS"
       }
     },
     {
@@ -102,9 +103,51 @@
       "ref": "J2",
       "part": "Regulated 5V 2A isolated supply input",
       "pins": {
-        "POS": "+5V_EXT",
+        "POS": "ADAPTER5V",
         "NEG": "GND"
       }
+    },
+    {
+      "ref": "BT1",
+      "part": "1x protected 18650 Li-ion 3.7V (P1835J)",
+      "pins": { "PLUS": "BAT_POS", "MINUS": "GND" }
+    },
+    {
+      "ref": "F1",
+      "part": "3A fast fuse >=12VDC, >=100A breaking",
+      "pins": { "1": "BAT_POS", "2": "BAT_FUSED" }
+    },
+    {
+      "ref": "S1",
+      "part": "DPDT ON-OFF-ON BBM, >=5A at 12VDC",
+      "pins": {
+        "A_COM": "+5V_EXT",
+        "A_EXT": "ADAPTER5V",
+        "A_BAT": "BOOST5V",
+        "B_COM": "BAT_FUSED",
+        "B_EXT": "NC",
+        "B_BAT": "BAT_SW"
+      }
+    },
+    {
+      "ref": "U4",
+      "part": "Pololu U3V70F5 #2891 (fixed 5V boost)",
+      "pins": { "VIN": "BAT_SW", "GND": "GND", "VOUT": "BOOST5V", "ENABLE": "NC" }
+    },
+    {
+      "ref": "C15",
+      "part": "100uF electrolytic 16V (boost VIN)",
+      "pins": { "PLUS": "BAT_SW", "MINUS": "GND" }
+    },
+    {
+      "ref": "R12",
+      "part": "10k ohm 1% (VBUS sense upper)",
+      "pins": { "1": "PC_VBUS", "2": "PC_PRESENT" }
+    },
+    {
+      "ref": "R13",
+      "part": "10k ohm 1% (VBUS sense lower)",
+      "pins": { "1": "PC_PRESENT", "2": "GND" }
     },
     {
       "ref": "D1",
