@@ -1,6 +1,6 @@
 {
   "title": "Talkboard HID relay PoC / net-label schematic",
-  "revision": 1,
+  "revision": 2,
   "notes": [
     "Every identical net label is connected. NC pins stay open.",
     "MCU1 numbers are physical header pin numbers, not GPIO numbers.",
@@ -128,22 +128,6 @@
       "pins": {
         "1": "DM_GPIO",
         "2": "USB_DM"
-      }
-    },
-    {
-      "ref": "R3",
-      "part": "15k ohm",
-      "pins": {
-        "1": "USB_DP",
-        "2": "GND"
-      }
-    },
-    {
-      "ref": "R4",
-      "part": "15k ohm",
-      "pins": {
-        "1": "USB_DM",
-        "2": "GND"
       }
     },
     {
